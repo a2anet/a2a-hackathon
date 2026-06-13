@@ -38,7 +38,9 @@ from a2a_hack.merge import merge_trajectory
 
 DEFAULT_MAX_STEPS = 60
 DEFAULT_MAX_ERRORS = 10
-DEFAULT_CONCURRENCY = 6
+# Each sim drives 3 models on one Vertex key; a high default 429s a single
+# express key. Raise --concurrency if your key has more quota.
+DEFAULT_CONCURRENCY = 2
 DEFAULT_OUTER_RETRIES = 2
 
 BRIDGE_IMPLEMENTATION = "a2a_bridge"
