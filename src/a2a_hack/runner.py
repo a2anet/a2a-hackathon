@@ -62,7 +62,7 @@ def start_env_api(manager: SessionManager, host: str, port: int, advertise_base:
         )
     )
     threading.Thread(target=server.run, daemon=True).start()
-    for _ in range(100):
+    for _ in range(300):  # up to 30s — startup can lag under host load
         if server.started:
             return server
         time.sleep(0.1)
