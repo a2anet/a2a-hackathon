@@ -1,0 +1,60 @@
+name: Build and push harness image
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag (default: v1)"
+        required: false
+        default: "v1"
+  push:
+    branches: [main]
+
+env:
+  PROJECT: a2a-net-f542d
+  REGION: us-central1
+  REGISTRY: us-central1-docker.pkg.dev/a2a-net-f542d/hackathon
+  IMAGE: harness
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout harness repo
+        uses: actions/checkout@v4
+        with:
+          path: a2a-hackathon
+
+      - name: Checkout tau2-bench (required as a docker build context)
+        uses: actions/checkout@v4
+        with:
+          repository: sierra-research/tau2-bench
+          path: tau2-bench
+
+      - name: Auth to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker auth for Artifact Registry
+        run: gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+
+      - name: Build image
+        working-directory: a2a-hackathon
+        env:
+          TAG: ${{ inputs.tag || 'v1' }}
+          SHA: ${{ github.sha }}
+        run: |
+          docker build \
+            --build-context tau2=../tau2-bench \
+            -t "${REGISTRY}/${IMAGE}:${TAG}" \
+            -t "${REGISTRY}/${IMAGE}:${SHA}" \
+            .
+
+      - name: Push image
+        env:
+          TAG: ${{ inputs.tag || 'v1' }}
+          SHA: ${{ github.sha }}
+        run: |
+          docker push "${REGISTRY}/${IMAGE}:${TAG}"
+          docker push "${REGISTRY}/${IMAGE}:${SHA}"
