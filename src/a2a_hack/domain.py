@@ -100,17 +100,35 @@ def get_hack_tasks(task_split_name: Optional[str] = None) -> list[Task]:
     return [task for task in tasks if task.id in split_ids]
 
 
+def _is_anthropic_llm(llm: str) -> bool:
+    """LiteLLM model strings that route to the Anthropic provider."""
+    return llm.startswith("anthropic/") or llm.startswith("claude-")
+
+
 def build_user_sim(llm: str, task: Task, llm_args: Optional[dict] = None) -> UserSimulator:
     """Build the user simulator for a hackathon task.
 
     tools=None selects tau2's no-tools simulation guidelines; the addendum
     re-frames the scenario as acting through a personal assistant.
+
+    For Anthropic user sims (the marking pipeline; default here is gemini),
+    inject Anthropic prompt-caching breakpoints via LiteLLM's
+    cache_control_injection_points hook: one anchor on the (stable) system
+    prompt, one rolling on the last message so each turn's growing
+    [system + tools + history] prefix is served from cache on the next turn
+    (5-min ephemeral, ~90% cheaper reads).
     """
+    final_args = dict(llm_args or {})
+    if _is_anthropic_llm(llm) and "cache_control_injection_points" not in final_args:
+        final_args["cache_control_injection_points"] = [
+            {"location": "message", "role": "system"},
+            {"location": "message", "index": -1},
+        ]
     return UserSimulator(
         llm=llm,
         instructions=str(task.user_scenario) + USER_SIM_ADDENDUM,
         tools=None,
-        llm_args=llm_args,
+        llm_args=final_args or None,
     )
 
 
