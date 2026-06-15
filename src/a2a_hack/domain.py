@@ -1,6 +1,6 @@
-"""Registers the "banking_hackathon" domain: tau2 banking_knowledge with
-hackathon-specific data overrides (A2A_HACK_DB / A2A_HACK_TASKS_DIR) and
-the hackathon task splits."""
+"""Registers the "banking_hackathon" domain: tau2 banking_knowledge with the
+hackathon task splits and the A2A_HACK_TASKS_DIR override (the marking VM points
+this at the held-out task set at final-marking time)."""
 
 import json
 import os
@@ -42,16 +42,6 @@ applications or referrals) when you ask it to.
 """.rstrip()
 
 
-def get_hack_db() -> TransactionalDB:
-    """Load the transactional DB, honoring the A2A_HACK_DB override.
-
-    The override is how the private marking repo points the harness at
-    perturbed data without the harness knowing anything about perturbation.
-    """
-    db_path = os.environ.get("A2A_HACK_DB", str(KNOWLEDGE_DB_PATH))
-    return TransactionalDB.load(db_path)
-
-
 def get_hack_environment(solo_mode: bool = False, **env_kwargs) -> Environment:
     """Environment constructor for the banking_hackathon domain.
 
@@ -59,7 +49,7 @@ def get_hack_environment(solo_mode: bool = False, **env_kwargs) -> Environment:
     recording via env.get_response guarantees byte-identical replay.
     """
     env = get_environment(
-        db=get_hack_db(),
+        db=TransactionalDB.load(str(KNOWLEDGE_DB_PATH)),
         retrieval_variant="no_knowledge",
         solo_mode=solo_mode,
         **env_kwargs,
