@@ -1,19 +1,18 @@
-"""M0 verification: golden actions through the HTTP env API + canned dialogue
--> merge -> evaluate must reproduce the exact task reward, with auth and
+"""M0 verification: golden actions through the HTTP env API -> evaluator
+trajectory -> reward must reproduce the exact task reward, with auth and
 session lifecycle enforced."""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from tau2.data_model.message import AssistantMessage, UserMessage
 from tau2.data_model.simulation import SimulationRun, TerminationReason
 from tau2.evaluator.evaluator import EvaluationType, evaluate_simulation
 
 from a2a_hack.domain import DOMAIN_NAME, get_hack_tasks
 from a2a_hack.env_api.server import create_app
 from a2a_hack.env_api.sessions import SessionManager
-from a2a_hack.merge import merge_trajectory
+from a2a_hack.merge import build_evaluation_trajectory
 
 USER_TOKEN = "user-secret"
 AGENT_TOKEN = "agent-secret"
@@ -58,25 +57,6 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _canned_conversation() -> list:
-    base = datetime.now() - timedelta(minutes=5)
-    texts = [
-        ("assistant", "Hi! How can I help you today?"),
-        ("user", "I referred four friends but only got two bonuses."),
-        ("assistant", "I checked with customer service and resubmitted the referral."),
-        ("user", "Great, thanks! ###STOP###"),
-    ]
-    messages = []
-    for i, (role, text) in enumerate(texts):
-        cls = AssistantMessage if role == "assistant" else UserMessage
-        # First two messages predate the tool calls, last two postdate them.
-        offset = timedelta(seconds=i) if i < 2 else timedelta(minutes=10 + i)
-        messages.append(
-            cls(role=role, content=text, timestamp=(base + offset).isoformat())
-        )
-    return messages
-
-
 def _simulation(task, merged) -> SimulationRun:
     now = datetime.now().isoformat()
     return SimulationRun(
@@ -113,8 +93,14 @@ def test_golden_replay_reward_one(client, manager, task):
         assert resp.status_code == 200, resp.text
         assert resp.json()["error"] is False, resp.json()
 
+    tool_events = [event for event in session.events if event.type == "tool"]
+    assert [event.sequence for event in tool_events] == [
+        record.sequence for record in session.records
+    ]
+    assert {event.channel for event in tool_events} <= {"user_personal", "personal_cs"}
+
     manager.close(session.id)
-    merged = merge_trajectory(_canned_conversation(), session.records)
+    merged = build_evaluation_trajectory(session.records)
     reward_info = evaluate_simulation(
         simulation=_simulation(task, merged),
         task=task,
@@ -123,6 +109,8 @@ def test_golden_replay_reward_one(client, manager, task):
         domain=DOMAIN_NAME,
     )
     assert reward_info.reward == 1.0, reward_info
+    assert all(message.role == "tool" or message.is_tool_call() for message in merged)
+    assert all(message.content is None for message in merged if message.role != "tool")
 
 
 def test_skipped_action_reward_zero(client, manager, task):
@@ -139,7 +127,7 @@ def test_skipped_action_reward_zero(client, manager, task):
     assert resp.status_code == 200
 
     manager.close(session.id)
-    merged = merge_trajectory(_canned_conversation(), session.records)
+    merged = build_evaluation_trajectory(session.records)
     reward_info = evaluate_simulation(
         simulation=_simulation(task, merged),
         task=task,

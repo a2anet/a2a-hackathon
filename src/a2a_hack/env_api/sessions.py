@@ -1,8 +1,8 @@
 """Session management and on-the-wire recording for the env tools API.
 
-A session is keyed by the A2A contextId. Everything the harness needs for
-evaluation and transcripts is recorded here: out-of-band env tool calls
-(both scopes) and the personal->CS conversation leg captured by the gateway.
+A session is keyed by the A2A contextId. The evaluator trajectory and the
+human-readable run timeline are both recorded here from one live sequence
+counter so UI ordering never depends on rewritten tau2 timestamps.
 """
 
 import threading
@@ -18,8 +18,19 @@ from tau2.utils.utils import get_now
 from a2a_hack.domain import get_hack_environment
 
 Scope = Literal["user", "agent"]
+EventType = Literal["message", "tool"]
+EventChannel = Literal["user_personal", "personal_cs"]
+EventActor = Literal["simulated_user", "personal_agent", "customer_service_agent"]
 
 SCOPE_TO_REQUESTOR: dict[Scope, str] = {"user": "user", "agent": "assistant"}
+SCOPE_TO_CHANNEL: dict[Scope, EventChannel] = {
+    "user": "user_personal",
+    "agent": "personal_cs",
+}
+SCOPE_TO_ACTOR: dict[Scope, EventActor] = {
+    "user": "personal_agent",
+    "agent": "customer_service_agent",
+}
 
 
 class SessionError(Exception):
@@ -43,21 +54,25 @@ class SessionClosedError(SessionError):
 class RecordedCall(BaseModel):
     """One env tool call executed through the API, with its result."""
 
-    seq: int
+    sequence: int
     timestamp: str
     scope: Scope
     tool_call: ToolCall
     tool_message: ToolMessage
 
 
-class RecordedChat(BaseModel):
-    """One message on the personal->CS leg, captured by the gateway."""
+class RecordedEvent(BaseModel):
+    """One ordered transcript/audit event for a simulation run."""
 
-    seq: int
+    sequence: int
     timestamp: str
-    role: Literal["personal", "cs"]
-    content: str
-    raw: Optional[dict] = None
+    type: EventType
+    channel: EventChannel
+    actor: EventActor
+    target: Optional[EventActor] = None
+    content: Optional[str] = None
+    tool_call: Optional[ToolCall] = None
+    tool_message: Optional[ToolMessage] = None
 
 
 class Session(BaseModel):
@@ -69,16 +84,16 @@ class Session(BaseModel):
     task: Task
     env: Environment
     records: list[RecordedCall] = Field(default_factory=list)
-    chat_records: list[RecordedChat] = Field(default_factory=list)
+    events: list[RecordedEvent] = Field(default_factory=list)
     closed: bool = False
 
     def model_post_init(self, __context) -> None:
         self._lock = threading.Lock()
-        self._seq = 0
+        self._sequence = 0
 
-    def _next_seq(self) -> int:
-        self._seq += 1
-        return self._seq
+    def _next_sequence(self) -> int:
+        self._sequence += 1
+        return self._sequence
 
     def tools(self, scope: Scope) -> list[Tool]:
         """Tools visible to a scope: user scope mirrors tau2's build_user
@@ -98,37 +113,80 @@ class Session(BaseModel):
                 raise SessionClosedError(f"Session {self.id} is closed")
             if name not in {t.name for t in self.tools(scope)}:
                 raise UnknownToolError(f"Unknown tool for {scope} scope: {name}")
-            seq = self._next_seq()
+            sequence = self._next_sequence()
             tool_call = ToolCall(
-                id=f"oob-{self.id}-{seq}",
+                id=f"oob-{self.id}-{sequence}",
                 name=name,
                 arguments=arguments,
                 requestor=SCOPE_TO_REQUESTOR[scope],
             )
             tool_message = self.env.get_response(tool_call)
+            timestamp = tool_message.timestamp or get_now()
             self.records.append(
                 RecordedCall(
-                    seq=seq,
-                    timestamp=tool_message.timestamp or get_now(),
+                    sequence=sequence,
+                    timestamp=timestamp,
                     scope=scope,
+                    tool_call=tool_call,
+                    tool_message=tool_message,
+                )
+            )
+            self.events.append(
+                RecordedEvent(
+                    sequence=sequence,
+                    timestamp=timestamp,
+                    type="tool",
+                    channel=SCOPE_TO_CHANNEL[scope],
+                    actor=SCOPE_TO_ACTOR[scope],
                     tool_call=tool_call,
                     tool_message=tool_message,
                 )
             )
             return tool_message
 
-    def record_chat(self, role: Literal["personal", "cs"], content: str, raw: Optional[dict] = None) -> None:
-        """Record one personal<->CS message (gateway capture). Best-effort:
-        recording never blocks tool execution semantics, but shares the lock
-        so seq ordering is globally consistent within the session."""
+    def record_user_personal_message(
+        self,
+        actor: Literal["simulated_user", "personal_agent"],
+        content: str,
+    ) -> None:
+        """Record one message on the simulated-user/personal-agent channel."""
         with self._lock:
-            self.chat_records.append(
-                RecordedChat(
-                    seq=self._next_seq(),
+            target: EventActor = (
+                "personal_agent" if actor == "simulated_user" else "simulated_user"
+            )
+            self.events.append(
+                RecordedEvent(
+                    sequence=self._next_sequence(),
                     timestamp=get_now(),
-                    role=role,
+                    type="message",
+                    channel="user_personal",
+                    actor=actor,
+                    target=target,
                     content=content,
-                    raw=raw,
+                )
+            )
+
+    def record_personal_cs_message(
+        self,
+        actor: Literal["personal_agent", "customer_service_agent"],
+        content: str,
+    ) -> None:
+        """Record one message on the personal-agent/customer-service channel."""
+        with self._lock:
+            target: EventActor = (
+                "customer_service_agent"
+                if actor == "personal_agent"
+                else "personal_agent"
+            )
+            self.events.append(
+                RecordedEvent(
+                    sequence=self._next_sequence(),
+                    timestamp=get_now(),
+                    type="message",
+                    channel="personal_cs",
+                    actor=actor,
+                    target=target,
+                    content=content,
                 )
             )
 

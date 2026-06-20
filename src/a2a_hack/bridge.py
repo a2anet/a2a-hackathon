@@ -8,7 +8,8 @@ team side."""
 
 import asyncio
 import uuid
-from typing import Optional
+from collections.abc import Callable
+from typing import Literal, Optional
 
 import httpx
 from a2a.client import ClientConfig, ClientFactory, minimal_agent_card
@@ -24,6 +25,8 @@ DEFAULT_TURN_TIMEOUT_S = 300.0
 # Orchestrator validate() rejects empty messages; coerce so one silent A2A
 # reply doesn't kill the sim.
 EMPTY_REPLY_PLACEHOLDER = "[no response]"
+BridgeActor = Literal["simulated_user", "personal_agent"]
+BridgeRecorder = Callable[[BridgeActor, str], None]
 
 
 def _text_from_a2a_message(message: A2AMessage) -> str:
@@ -61,10 +64,12 @@ class A2ABridgeAgent(HalfDuplexParticipant[UserMessage, AssistantMessage, None])
         personal_url: str,
         context_id: str,
         timeout: float = DEFAULT_TURN_TIMEOUT_S,
+        record_message: Optional[BridgeRecorder] = None,
     ):
         self.personal_url = personal_url
         self.context_id = context_id
         self.timeout = timeout
+        self.record_message = record_message
         # Minimal card: always POST to the URL we were given, ignoring
         # whatever URL the agent's own card advertises (docker networking).
         self._card: AgentCard = minimal_agent_card(personal_url, ["JSONRPC"])
@@ -82,9 +87,13 @@ class A2ABridgeAgent(HalfDuplexParticipant[UserMessage, AssistantMessage, None])
     ) -> tuple[AssistantMessage, None]:
         """Send one user turn to the personal agent and wait for the reply."""
         text = message.content or ""
+        if self.record_message is not None:
+            self.record_message("simulated_user", text)
         reply = asyncio.run(self._send(text))
         if not reply.strip():
             reply = EMPTY_REPLY_PLACEHOLDER
+        if self.record_message is not None:
+            self.record_message("personal_agent", reply)
         return AssistantMessage(role="assistant", content=reply), None
 
     async def _send(self, text: str) -> str:

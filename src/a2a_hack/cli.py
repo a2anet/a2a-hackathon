@@ -191,15 +191,32 @@ def smoke(
     finally:
         server.should_exit = True
 
-    console.rule(f"[bold]Leg 1 + env tool calls (task {task.id})")
+    console.rule(f"[bold]Events (task {task.id})")
+    events = sorted(
+        ((simulation.info or {}).get("events") or []),
+        key=lambda event: event.get("sequence", 0),
+    )
+    for event in events:
+        channel = event.get("channel")
+        actor = event.get("actor")
+        if event.get("type") == "message":
+            console.print(
+                f"[bold]{channel}/{actor}:[/bold] {(event.get('content') or '')[:500]}"
+            )
+        elif event.get("type") == "tool":
+            tool_call = event.get("tool_call") or {}
+            console.print(
+                f"[yellow]{channel}/{actor} tool:[/yellow] "
+                f"{tool_call.get('name')}({json.dumps(tool_call.get('arguments') or {})[:200]})"
+            )
+
+    console.rule("[bold]Tau2 evaluator tool trajectory")
     for msg in simulation.messages or []:
         if isinstance(msg, ToolMessage):
             content = (msg.content or "")[:300]
             console.print(f"  [dim]tool result ({msg.requestor}):[/dim] {content}")
         elif isinstance(msg, (UserMessage, AssistantMessage)):
             if msg.is_tool_call():
-                # Out-of-band env calls: user scope = the personal agent acting
-                # for the user; assistant scope = the CS agent.
                 for tc in msg.tool_calls:
                     who = (
                         "personal agent (user tools)"
@@ -210,14 +227,6 @@ def smoke(
                         f"[yellow]{who}:[/yellow] "
                         f"{tc.name}({json.dumps(tc.arguments)[:200]})"
                     )
-            else:
-                who = "user sim" if isinstance(msg, UserMessage) else "personal agent"
-                console.print(f"[bold]{who}:[/bold] {msg.content}")
-
-    console.rule("[bold]Leg 2 (personal <-> CS via gateway)")
-    leg2 = (simulation.info or {}).get("leg2", [])
-    for record in leg2:
-        console.print(f"[bold]{record['role']}:[/bold] {record['content'][:500]}")
 
     console.rule("[bold]Checks")
     num_tool_calls = (simulation.info or {}).get("num_env_tool_calls", 0)
@@ -228,13 +237,14 @@ def smoke(
         )
     else:
         console.print(f"[green]{num_tool_calls} env tool call(s) recorded under the contextId.[/green]")
-    if not leg2:
+    if not any(event.get("channel") == "personal_cs" for event in events):
         console.print(
             "[red]No personal->CS messages were captured. Check that the personal agent "
             "calls CS_AGENT_URL and propagates the incoming contextId.[/red]"
         )
     else:
-        console.print(f"[green]{len(leg2)} leg-2 message(s) captured by the gateway.[/green]")
+        cs_events = [event for event in events if event.get("channel") == "personal_cs"]
+        console.print(f"[green]{len(cs_events)} personal-CS event(s) captured by the gateway.[/green]")
 
     reward = simulation.reward_info.reward if simulation.reward_info else 0.0
     console.print(

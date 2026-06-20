@@ -1,7 +1,5 @@
 """M1 verification: ADK's built-in A2A executor honors the client-supplied
-contextId end-to-end (session id == contextId inside the agent), the
-personal->gateway->CS hop preserves the contextId, and the gateway records
-the leg-2 messages in passthrough."""
+contextId end-to-end, and the harness records a single ordered event stream."""
 
 import uuid
 from typing import AsyncGenerator
@@ -106,7 +104,11 @@ def test_contextid_end_to_end(stack):
     task = next(t for t in get_hack_tasks() if t.id == "task_010")
     session = manager.create_session(CTX_ID, task)
 
-    bridge = A2ABridgeAgent(personal_url=personal_url, context_id=CTX_ID)
+    bridge = A2ABridgeAgent(
+        personal_url=personal_url,
+        context_id=CTX_ID,
+        record_message=session.record_user_personal_message,
+    )
     reply, _ = bridge.generate_next_message(
         UserMessage(role="user", content="hello agents"), None
     )
@@ -115,10 +117,22 @@ def test_contextid_end_to_end(stack):
     assert f"personal sid={CTX_ID}" in (reply.content or ""), reply.content
     assert f"cs sid={CTX_ID}" in (reply.content or ""), reply.content
 
-    # Gateway recorded leg 2 (personal -> CS and the CS reply) in passthrough.
-    roles = [r.role for r in session.chat_records]
-    assert "personal" in roles and "cs" in roles, session.chat_records
-    personal_msgs = [r for r in session.chat_records if r.role == "personal"]
-    cs_msgs = [r for r in session.chat_records if r.role == "cs"]
-    assert any("relay:hello agents" in r.content for r in personal_msgs)
-    assert any(f"cs sid={CTX_ID}" in r.content for r in cs_msgs)
+    # One ordered event stream captures both channels.
+    events = session.events
+    assert [event.sequence for event in events] == sorted(event.sequence for event in events)
+    assert [event.channel for event in events] == [
+        "user_personal",
+        "personal_cs",
+        "personal_cs",
+        "user_personal",
+    ]
+    assert [event.actor for event in events] == [
+        "simulated_user",
+        "personal_agent",
+        "customer_service_agent",
+        "personal_agent",
+    ]
+    assert events[0].content == "hello agents"
+    assert "relay:hello agents" in (events[1].content or "")
+    assert f"cs sid={CTX_ID}" in (events[2].content or "")
+    assert f"personal sid={CTX_ID}" in (events[3].content or "")

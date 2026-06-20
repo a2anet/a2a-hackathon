@@ -158,7 +158,7 @@ def create_app(manager: SessionManager, advertise_base: Optional[str] = None) ->
         session = manager.find(context_id)
         if session is not None:
             text = _extract_text(message)
-            session.record_chat("personal", text, raw=message)
+            session.record_personal_cs_message("personal_agent", text)
         return context_id
 
     def _record_reply(context_id: Optional[str], result: Any) -> None:
@@ -168,7 +168,7 @@ def create_app(manager: SessionManager, advertise_base: Optional[str] = None) ->
         if session is None:
             return
         text = _extract_reply_text(result)
-        session.record_chat("cs", text, raw=result if isinstance(result, dict) else None)
+        session.record_personal_cs_message("customer_service_agent", text)
 
     @app.post(GATEWAY_PATH)
     async def gateway(request: Request):

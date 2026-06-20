@@ -1,11 +1,9 @@
-"""Merge the orchestrator conversation with out-of-band recorded tool calls
-into a single tau2 trajectory suitable for Environment.set_state replay.
+"""Build the tau2 evaluator trajectory from recorded tool calls.
 
-Each recorded call becomes an atomic [carrier message with the tool_call,
-ToolMessage] pair; pairs are interleaved with conversation messages by
-timestamp (same host clock) and never split. Timestamps are then rewritten
-strictly monotonic and turn_idx renumbered, which is what the evaluator and
-results viewers expect."""
+The human-readable transcript lives in session events. tau2 scoring only needs
+tool-call carrier messages immediately followed by matching ToolMessage
+results, so regular chat text is intentionally excluded from this trajectory.
+"""
 
 from datetime import datetime, timedelta
 
@@ -25,37 +23,20 @@ def _carrier_message(record: RecordedCall) -> Message:
     )
 
 
-def merge_trajectory(
-    conversation: list[Message], records: list[RecordedCall]
-) -> list[Message]:
-    """Merge conversation messages and recorded env tool calls into one trajectory.
+def build_evaluation_trajectory(records: list[RecordedCall]) -> list[Message]:
+    """Build a tau2-compatible evaluator trajectory from recorded tool calls.
 
     Args:
-        conversation: The orchestrator trajectory (text-only messages between
-            the user sim and the personal agent via the bridge).
         records: The session's recorded tool calls, in execution order.
 
     Returns:
-        A chronologically ordered trajectory with strictly monotonic
-        timestamps and renumbered turn_idx.
+        Tool-call carrier and ToolMessage pairs with strictly monotonic
+        timestamps and renumbered turn indexes.
     """
-    pairs = [
-        [_carrier_message(record), record.tool_message] for record in records
-    ]
-
-    conv = sorted(conversation, key=lambda m: m.timestamp)
     merged: list[Message] = []
-    ci, pi = 0, 0
-    while ci < len(conv) and pi < len(pairs):
-        if conv[ci].timestamp <= pairs[pi][0].timestamp:
-            merged.append(conv[ci])
-            ci += 1
-        else:
-            merged.extend(pairs[pi])
-            pi += 1
-    merged.extend(conv[ci:])
-    for pair in pairs[pi:]:
-        merged.extend(pair)
+    for record in sorted(records, key=lambda item: item.sequence):
+        merged.append(_carrier_message(record))
+        merged.append(record.tool_message)
 
     # Rewrite timestamps strictly monotonic; keeps downstream sorts stable.
     base = datetime.now() - timedelta(seconds=len(merged))

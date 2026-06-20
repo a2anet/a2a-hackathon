@@ -34,7 +34,7 @@ from a2a_hack.bridge import A2ABridgeAgent
 from a2a_hack.domain import DOMAIN_NAME, build_user_sim
 from a2a_hack.env_api.server import create_app
 from a2a_hack.env_api.sessions import SessionManager
-from a2a_hack.merge import merge_trajectory
+from a2a_hack.merge import build_evaluation_trajectory
 
 DEFAULT_MAX_STEPS = 60
 DEFAULT_MAX_ERRORS = 10
@@ -80,16 +80,19 @@ def run_one(
     max_errors: int = DEFAULT_MAX_ERRORS,
     task_timeout: float = DEFAULT_TASK_TIMEOUT_S,
 ) -> SimulationRun:
-    """Run a single simulation: session -> orchestrator -> merge -> evaluate.
+    """Run a single simulation: session -> orchestrator -> evaluate.
 
-    A fresh uuid is both the env session id and the A2A contextId; the merged
-    trajectory (conversation + out-of-band tool calls) is the evaluation
-    input, so this can't reuse tau2's run_simulation (which evaluates before
-    the merge could happen).
+    A fresh uuid is both the env session id and the A2A contextId. The
+    transcript is recorded as ordered events while tau2 gets an evaluator-only
+    tool-call trajectory.
     """
     sid = uuid.uuid4().hex
     session = manager.create_session(sid, task)
-    bridge = A2ABridgeAgent(personal_url=personal_url, context_id=sid)
+    bridge = A2ABridgeAgent(
+        personal_url=personal_url,
+        context_id=sid,
+        record_message=session.record_user_personal_message,
+    )
     user_sim = build_user_sim(user_llm, task, user_llm_args)
     orchestrator = Orchestrator(
         domain=DOMAIN_NAME,
@@ -108,7 +111,7 @@ def run_one(
     finally:
         manager.close(sid)
 
-    simulation.messages = merge_trajectory(simulation.messages, session.records)
+    simulation.messages = build_evaluation_trajectory(session.records)
     simulation.reward_info = evaluate_simulation(
         simulation=simulation,
         task=task,
@@ -118,7 +121,10 @@ def run_one(
     )
     simulation.info = {
         "context_id": sid,
-        "leg2": [r.model_dump(exclude={"raw"}) for r in session.chat_records],
+        "events": [
+            event.model_dump(mode="json", exclude_none=True)
+            for event in session.events
+        ],
         "num_env_tool_calls": len(session.records),
     }
     return simulation
