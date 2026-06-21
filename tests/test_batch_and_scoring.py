@@ -18,6 +18,7 @@ from tau2.data_model.simulation import (
 from tau2.environment.environment import EnvironmentInfo
 
 import a2a_hack.runner as runner_module
+import a2a_hack.domain as domain_module
 from a2a_hack.domain import get_hack_tasks
 from a2a_hack.runner import run_batch
 from a2a_hack.scoring import score_pairings
@@ -93,6 +94,46 @@ def test_batch_checkpoint_and_resume(tmp_path, monkeypatch, personal_echo):
     for sim in second.simulations:
         assert sim.termination_reason == TerminationReason.USER_STOP
         assert sim.reward_info is not None and sim.reward_info.reward == 0.0
+
+
+def test_vertex_claude_user_sim_gets_anthropic_cache_args(monkeypatch) -> None:
+    captured: dict = {}
+
+    class FakeUserSimulator:
+        """Capture build_user_sim args without constructing tau2's simulator."""
+
+        def __init__(
+            self,
+            llm: str,
+            instructions: str,
+            tools: object,
+            llm_args: dict | None,
+        ) -> None:
+            captured["llm"] = llm
+            captured["instructions"] = instructions
+            captured["tools"] = tools
+            captured["llm_args"] = llm_args
+
+    class TaskStub:
+        """Minimal task shape used by build_user_sim."""
+
+        user_scenario = "complete the task"
+
+    monkeypatch.setattr(domain_module, "UserSimulator", FakeUserSimulator)
+
+    domain_module.build_user_sim(
+        "vertex_ai/claude-sonnet-4-6",
+        TaskStub(),
+        {"vertex_project": "agent-project"},
+    )
+
+    assert captured["llm"] == "vertex_ai/claude-sonnet-4-6"
+    assert captured["tools"] is None
+    assert captured["llm_args"]["vertex_project"] == "agent-project"
+    assert captured["llm_args"]["cache_control_injection_points"] == [
+        {"location": "message", "role": "system"},
+        {"location": "message", "index": -1},
+    ]
 
 
 def _minimal_info() -> Info:

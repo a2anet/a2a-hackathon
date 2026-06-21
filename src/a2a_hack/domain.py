@@ -92,7 +92,11 @@ def get_hack_tasks(task_split_name: Optional[str] = None) -> list[Task]:
 
 def _is_anthropic_llm(llm: str) -> bool:
     """LiteLLM model strings that route to the Anthropic provider."""
-    return llm.startswith("anthropic/") or llm.startswith("claude-")
+    return (
+        llm.startswith("anthropic/")
+        or llm.startswith("claude-")
+        or (llm.startswith("vertex_ai/") and "claude" in llm)
+    )
 
 
 def build_user_sim(llm: str, task: Task, llm_args: Optional[dict] = None) -> UserSimulator:
