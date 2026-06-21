@@ -16,6 +16,7 @@ from tau2.environment.tool import Tool
 from tau2.utils.utils import get_now
 
 from a2a_hack.domain import get_hack_environment
+from a2a_hack.model_usage import ModelUsageRecord
 
 Scope = Literal["user", "agent"]
 EventType = Literal["message", "tool"]
@@ -85,6 +86,7 @@ class Session(BaseModel):
     env: Environment
     records: list[RecordedCall] = Field(default_factory=list)
     events: list[RecordedEvent] = Field(default_factory=list)
+    model_usage_records: list[ModelUsageRecord] = Field(default_factory=list)
     closed: bool = False
 
     def model_post_init(self, __context) -> None:
@@ -189,6 +191,11 @@ class Session(BaseModel):
                     content=content,
                 )
             )
+
+    def record_model_usage(self, record: ModelUsageRecord) -> None:
+        """Record one normalized model usage record for this session."""
+        with self._lock:
+            self.model_usage_records.append(record)
 
 
 class SessionManager:

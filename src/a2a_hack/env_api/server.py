@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
 
 from a2a_hack.env_api.sessions import Scope, SessionError, SessionManager
+from a2a_hack.model_usage import ModelUsageRecord
 
 GATEWAY_PATH = "/cs-agent"
 AGENT_CARD_PATHS = [
@@ -122,6 +123,16 @@ def create_app(manager: SessionManager, advertise_base: Optional[str] = None) ->
             )
         tool_message = session.execute_tool(scope, name, arguments)
         return {"content": tool_message.content, "error": tool_message.error}
+
+    @app.post("/sessions/{cid}/model-usage")
+    def record_model_usage(cid: str, request: Request, body: dict | None = None):
+        scope = _bearer_scope(request, manager)
+        if scope is None:
+            return JSONResponse(status_code=401, content={"detail": "Invalid token"})
+        session = manager.get(cid)
+        record = ModelUsageRecord.model_validate(body or {})
+        session.record_model_usage(record)
+        return {"ok": True}
 
     # ------------------------------------------------------------------
     # CS-agent gateway

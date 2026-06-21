@@ -35,6 +35,7 @@ from a2a_hack.domain import DOMAIN_NAME, build_user_sim
 from a2a_hack.env_api.server import create_app
 from a2a_hack.env_api.sessions import SessionManager
 from a2a_hack.merge import build_evaluation_trajectory
+from a2a_hack.model_usage import aggregate_model_usage, usage_records_from_messages
 
 DEFAULT_MAX_STEPS = 60
 DEFAULT_MAX_ERRORS = 10
@@ -111,6 +112,10 @@ def run_one(
     finally:
         manager.close(sid)
 
+    model_usage_records = [
+        *usage_records_from_messages(simulation.messages or []),
+        *session.model_usage_records,
+    ]
     simulation.messages = build_evaluation_trajectory(session.records)
     simulation.reward_info = evaluate_simulation(
         simulation=simulation,
@@ -126,6 +131,7 @@ def run_one(
             for event in session.events
         ],
         "num_env_tool_calls": len(session.records),
+        "model_usage": aggregate_model_usage(model_usage_records),
     }
     return simulation
 
