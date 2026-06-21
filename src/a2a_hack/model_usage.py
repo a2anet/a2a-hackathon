@@ -52,8 +52,12 @@ def estimate_model_cost_usd(
 
     input_rate = ANTHROPIC_SONNET_INPUT_USD_PER_MILLION
     output_rate = ANTHROPIC_SONNET_OUTPUT_USD_PER_MILLION
+    uncached_input_tokens = max(
+        input_tokens - cache_read_input_tokens - cache_write_input_tokens,
+        0,
+    )
     return (
-        input_tokens * input_rate
+        uncached_input_tokens * input_rate
         + output_tokens * output_rate
         + cache_read_input_tokens * input_rate * ANTHROPIC_CACHE_READ_MULTIPLIER
         + cache_write_input_tokens * input_rate * ANTHROPIC_CACHE_WRITE_MULTIPLIER

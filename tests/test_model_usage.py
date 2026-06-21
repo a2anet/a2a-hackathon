@@ -15,7 +15,7 @@ def test_usage_records_from_messages_extracts_cache_tokens() -> None:
         role="user",
         content="hello",
         cost=0.25,
-        usage={"prompt_tokens": 100, "completion_tokens": 20},
+        usage={"prompt_tokens": 150, "completion_tokens": 20},
         raw_data={
             "model": "vertex_ai/claude-sonnet-4-6",
             "usage": {
@@ -36,7 +36,7 @@ def test_usage_records_from_messages_extracts_cache_tokens() -> None:
     aggregate = aggregate_model_usage(records)
 
     assert aggregate["calls"] == 1
-    assert aggregate["input_tokens"] == 100
+    assert aggregate["input_tokens"] == 150
     assert aggregate["output_tokens"] == 20
     assert aggregate["cache_read_input_tokens"] == 40
     assert aggregate["cache_write_input_tokens"] == 10
@@ -58,7 +58,7 @@ def test_model_usage_endpoint_records_session_usage() -> None:
             json={
                 "actor": "heldout_personal",
                 "model": "claude-sonnet-4-6",
-                "input_tokens": 1000,
+                "input_tokens": 1950,
                 "output_tokens": 100,
                 "cache_read_input_tokens": 750,
                 "cache_write_input_tokens": 200,
