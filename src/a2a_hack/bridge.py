@@ -19,6 +19,7 @@ from tau2.agent.base.participant import HalfDuplexParticipant
 from tau2.data_model.message import AssistantMessage, Message, UserMessage
 
 from a2a_hack.a2a_errors import A2ATaskFailure
+from a2a_hack.a2a_errors import failure_from_provider_error_text
 from a2a_hack.a2a_errors import failure_from_task
 from a2a_hack.a2a_errors import text_from_a2a_message
 from a2a_hack.a2a_errors import text_from_a2a_task
@@ -80,6 +81,10 @@ class A2ABridgeAgent(HalfDuplexParticipant[UserMessage, AssistantMessage, None])
         reply = asyncio.run(self._send(text))
         if not reply.strip():
             reply = EMPTY_REPLY_PLACEHOLDER
+        failure = failure_from_provider_error_text("personal_agent", reply)
+        if failure is not None:
+            self._record_task_failure(failure)
+            raise failure
         if self.record_message is not None:
             self.record_message("personal_agent", reply)
         if self.check_failures is not None:

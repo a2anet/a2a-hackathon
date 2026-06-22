@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from loguru import logger
 
 from a2a_hack.a2a_errors import failure_from_payload
+from a2a_hack.a2a_errors import failure_from_provider_error_text
 from a2a_hack.env_api.sessions import Scope, SessionError, SessionManager
 from a2a_hack.model_usage import ModelUsageRecord
 
@@ -181,14 +182,15 @@ def create_app(manager: SessionManager, advertise_base: Optional[str] = None) ->
             return
         text = _extract_reply_text(result)
         session.record_personal_cs_message("customer_service_agent", text)
+        failure = failure_from_provider_error_text("customer_service_agent", text)
         if isinstance(result, dict):
-            failure = failure_from_payload(result, "customer_service_agent", text)
-            if failure is not None:
-                session.record_personal_cs_failure(
-                    "customer_service_agent",
-                    failure.state,
-                    failure.message,
-                )
+            failure = failure_from_payload(result, "customer_service_agent", text) or failure
+        if failure is not None:
+            session.record_personal_cs_failure(
+                "customer_service_agent",
+                failure.state,
+                failure.message,
+            )
 
     @app.post(GATEWAY_PATH)
     async def gateway(request: Request):

@@ -8,6 +8,11 @@ from a2a.types import Task
 from a2a.types import TextPart
 
 FAILED_TASK_STATES = {"failed", "canceled", "rejected"}
+PROVIDER_ERROR_SIGNATURES = (
+    "google.github.io/adk-docs/agents/models/google-gemini/#error-code-429",
+    "resource_exhausted",
+    "rate_limit_error",
+)
 
 
 class A2ATaskFailure(RuntimeError):
@@ -79,6 +84,21 @@ def failure_from_payload(
     if state is None:
         return None
     return A2ATaskFailure(actor, state, message)
+
+
+def failure_from_provider_error_text(actor: str, message: str) -> A2ATaskFailure | None:
+    """Build an exception when agent text contains a provider/runtime failure."""
+    if not is_provider_error_text(message):
+        return None
+    return A2ATaskFailure(actor, "failed", message)
+
+
+def is_provider_error_text(message: str) -> bool:
+    """Return whether text is a surfaced model-provider/runtime error."""
+    text = message.lower()
+    if "429" not in text:
+        return False
+    return any(signature in text for signature in PROVIDER_ERROR_SIGNATURES)
 
 
 def _state_value(state: object) -> str:
