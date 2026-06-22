@@ -8,6 +8,7 @@ import multiprocessing
 import random
 import threading
 import time
+import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -20,6 +21,7 @@ from tau2.data_model.simulation import (
     Info,
     Results,
     SimulationRun,
+    TerminationReason,
     UserInfo,
 )
 from tau2.data_model.tasks import Task
@@ -28,12 +30,13 @@ from tau2.orchestrator.orchestrator import Orchestrator
 from tau2.runner.checkpoint import create_checkpoint_fns, try_resume
 from tau2.runner.progress import StatusMonitor, run_with_retry
 from tau2.user.user_simulator import get_global_user_sim_guidelines
-from tau2.utils.utils import get_commit_hash
+from tau2.utils.utils import get_commit_hash, get_now
 
+from a2a_hack.a2a_errors import A2ATaskFailure
 from a2a_hack.bridge import A2ABridgeAgent
 from a2a_hack.domain import DOMAIN_NAME, build_user_sim
 from a2a_hack.env_api.server import create_app
-from a2a_hack.env_api.sessions import SessionManager
+from a2a_hack.env_api.sessions import Session, SessionManager
 from a2a_hack.merge import build_evaluation_trajectory
 from a2a_hack.model_usage import aggregate_model_usage, usage_records_from_messages
 
@@ -89,10 +92,14 @@ def run_one(
     """
     sid = uuid.uuid4().hex
     session = manager.create_session(sid, task)
+    start_time = get_now()
+    start_monotonic = time.monotonic()
     bridge = A2ABridgeAgent(
         personal_url=personal_url,
         context_id=sid,
         record_message=session.record_user_personal_message,
+        record_failure=session.record_user_personal_failure,
+        check_failures=session.raise_if_a2a_failed,
     )
     user_sim = build_user_sim(user_llm, task, user_llm_args)
     orchestrator = Orchestrator(
@@ -109,6 +116,17 @@ def run_one(
     )
     try:
         simulation = orchestrator.run()
+        session.raise_if_a2a_failed()
+    except A2ATaskFailure as e:
+        return _failed_a2a_simulation(
+            task=task,
+            session=session,
+            simulation_id=sid,
+            start_time=start_time,
+            duration=time.monotonic() - start_monotonic,
+            error=e,
+            error_traceback=traceback.format_exc(),
+        )
     finally:
         manager.close(sid)
 
@@ -134,6 +152,41 @@ def run_one(
         "model_usage": aggregate_model_usage(model_usage_records),
     }
     return simulation
+
+
+def _failed_a2a_simulation(
+    task: Task,
+    session: Session,
+    simulation_id: str,
+    start_time: str,
+    duration: float,
+    error: A2ATaskFailure,
+    error_traceback: str,
+) -> SimulationRun:
+    """Build a failed SimulationRun for an upstream A2A task failure."""
+    return SimulationRun(
+        id=simulation_id,
+        task_id=task.id,
+        start_time=start_time,
+        end_time=get_now(),
+        duration=duration,
+        termination_reason=TerminationReason.INFRASTRUCTURE_ERROR,
+        reward_info=None,
+        messages=build_evaluation_trajectory(session.records),
+        seed=None,
+        info={
+            "context_id": simulation_id,
+            "events": [
+                event.model_dump(mode="json", exclude_none=True)
+                for event in session.events
+            ],
+            "num_env_tool_calls": len(session.records),
+            "model_usage": aggregate_model_usage(session.model_usage_records),
+            "error": str(error),
+            "error_type": type(error).__name__,
+            "error_traceback": error_traceback,
+        },
+    )
 
 
 def build_info(

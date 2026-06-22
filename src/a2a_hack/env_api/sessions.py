@@ -76,6 +76,16 @@ class RecordedEvent(BaseModel):
     tool_message: Optional[ToolMessage] = None
 
 
+class RecordedA2AFailure(BaseModel):
+    """One upstream A2A task failure observed during a simulation run."""
+
+    timestamp: str
+    channel: EventChannel
+    actor: EventActor
+    state: str
+    message: str
+
+
 class Session(BaseModel):
     """Live state for one simulation, keyed by contextId."""
 
@@ -86,6 +96,7 @@ class Session(BaseModel):
     env: Environment
     records: list[RecordedCall] = Field(default_factory=list)
     events: list[RecordedEvent] = Field(default_factory=list)
+    a2a_failures: list[RecordedA2AFailure] = Field(default_factory=list)
     model_usage_records: list[ModelUsageRecord] = Field(default_factory=list)
     closed: bool = False
 
@@ -189,6 +200,55 @@ class Session(BaseModel):
                     actor=actor,
                     target=target,
                     content=content,
+                )
+            )
+
+    def record_user_personal_failure(
+        self,
+        actor: Literal["personal_agent"],
+        state: str,
+        message: str,
+    ) -> None:
+        """Record an A2A task failure on the simulated-user/personal-agent leg."""
+        self._record_a2a_failure("user_personal", actor, state, message)
+
+    def record_personal_cs_failure(
+        self,
+        actor: Literal["customer_service_agent"],
+        state: str,
+        message: str,
+    ) -> None:
+        """Record an A2A task failure on the personal-agent/customer-service leg."""
+        self._record_a2a_failure("personal_cs", actor, state, message)
+
+    def first_a2a_failure(self) -> Optional[RecordedA2AFailure]:
+        """Return the first observed upstream A2A task failure, if any."""
+        with self._lock:
+            return self.a2a_failures[0] if self.a2a_failures else None
+
+    def raise_if_a2a_failed(self) -> None:
+        """Raise when an upstream A2A task failure has been recorded."""
+        from a2a_hack.a2a_errors import A2ATaskFailure
+
+        failure = self.first_a2a_failure()
+        if failure is not None:
+            raise A2ATaskFailure(failure.actor, failure.state, failure.message)
+
+    def _record_a2a_failure(
+        self,
+        channel: EventChannel,
+        actor: EventActor,
+        state: str,
+        message: str,
+    ) -> None:
+        with self._lock:
+            self.a2a_failures.append(
+                RecordedA2AFailure(
+                    timestamp=get_now(),
+                    channel=channel,
+                    actor=actor,
+                    state=state,
+                    message=message,
                 )
             )
 

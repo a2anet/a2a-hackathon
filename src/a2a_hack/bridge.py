@@ -18,6 +18,11 @@ from loguru import logger
 from tau2.agent.base.participant import HalfDuplexParticipant
 from tau2.data_model.message import AssistantMessage, Message, UserMessage
 
+from a2a_hack.a2a_errors import A2ATaskFailure
+from a2a_hack.a2a_errors import failure_from_task
+from a2a_hack.a2a_errors import text_from_a2a_message
+from a2a_hack.a2a_errors import text_from_a2a_task
+
 # Per-turn budget (one personal turn runs a whole CS sub-loop: RAG + tools).
 # The whole-task budget is enforced separately by the orchestrator timeout.
 DEFAULT_TURN_TIMEOUT_S = 300.0
@@ -27,29 +32,8 @@ DEFAULT_TURN_TIMEOUT_S = 300.0
 EMPTY_REPLY_PLACEHOLDER = "[no response]"
 BridgeActor = Literal["simulated_user", "personal_agent"]
 BridgeRecorder = Callable[[BridgeActor, str], None]
-
-
-def _text_from_a2a_message(message: A2AMessage) -> str:
-    texts = []
-    for part in message.parts or []:
-        root = getattr(part, "root", part)
-        if isinstance(root, TextPart) and root.text:
-            texts.append(root.text)
-    return "\n".join(texts)
-
-
-def _text_from_task(task: Task) -> str:
-    texts = []
-    for artifact in task.artifacts or []:
-        for part in artifact.parts or []:
-            root = getattr(part, "root", part)
-            if isinstance(root, TextPart) and root.text:
-                texts.append(root.text)
-    if task.status is not None and task.status.message is not None:
-        text = _text_from_a2a_message(task.status.message)
-        if text:
-            texts.append(text)
-    return "\n".join(texts)
+BridgeFailureRecorder = Callable[[str, str, str], None]
+BridgeFailureChecker = Callable[[], None]
 
 
 class A2ABridgeAgent(HalfDuplexParticipant[UserMessage, AssistantMessage, None]):
@@ -65,11 +49,15 @@ class A2ABridgeAgent(HalfDuplexParticipant[UserMessage, AssistantMessage, None])
         context_id: str,
         timeout: float = DEFAULT_TURN_TIMEOUT_S,
         record_message: Optional[BridgeRecorder] = None,
-    ):
+        record_failure: Optional[BridgeFailureRecorder] = None,
+        check_failures: Optional[BridgeFailureChecker] = None,
+    ) -> None:
         self.personal_url = personal_url
         self.context_id = context_id
         self.timeout = timeout
         self.record_message = record_message
+        self.record_failure = record_failure
+        self.check_failures = check_failures
         # Minimal card: always POST to the URL we were given, ignoring
         # whatever URL the agent's own card advertises (docker networking).
         self._card: AgentCard = minimal_agent_card(personal_url, ["JSONRPC"])
@@ -94,6 +82,8 @@ class A2ABridgeAgent(HalfDuplexParticipant[UserMessage, AssistantMessage, None])
             reply = EMPTY_REPLY_PLACEHOLDER
         if self.record_message is not None:
             self.record_message("personal_agent", reply)
+        if self.check_failures is not None:
+            self.check_failures()
         return AssistantMessage(role="assistant", content=reply), None
 
     async def _send(self, text: str) -> str:
@@ -110,9 +100,20 @@ class A2ABridgeAgent(HalfDuplexParticipant[UserMessage, AssistantMessage, None])
             reply = ""
             async for event in client.send_message(outgoing):
                 if isinstance(event, A2AMessage):
-                    reply = _text_from_a2a_message(event) or reply
+                    reply = text_from_a2a_message(event) or reply
                 elif isinstance(event, tuple):
                     task = event[0]
                     if isinstance(task, Task):
-                        reply = _text_from_task(task) or reply
+                        failure = failure_from_task(task, "personal_agent")
+                        if failure is not None:
+                            self._record_task_failure(failure)
+                            raise failure
+                        reply = text_from_a2a_task(task) or reply
             return reply
+
+    def _record_task_failure(self, failure: A2ATaskFailure) -> None:
+        """Record an upstream personal-agent task failure before raising it."""
+        if self.record_message is not None:
+            self.record_message("personal_agent", failure.message)
+        if self.record_failure is not None:
+            self.record_failure(failure.actor, failure.state, failure.message)
